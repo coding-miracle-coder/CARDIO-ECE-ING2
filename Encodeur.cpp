@@ -1,4 +1,5 @@
 #include "Encodeur.h"
+    Encodeur* Encodeur::instance = nullptr;
 
     Encodeur::Encodeur()
         : encodeur(pinA,pinB,pinBouton){
@@ -10,13 +11,9 @@
         encodeur.setEncoderHandler(rotation);
     }
     
-    action Encodeur::quelleAction(){
-        encodeur.update();
-
-        action ancienneAction = this->etat;
+    void Encodeur::loopEncodeur(){
         this->etat = INACTIF;
-
-        return ancienneAction;
+        encodeur.update();
     }
 
 
@@ -25,13 +22,28 @@
     }
     
     void Encodeur::rotation(EncoderButton& eb){
-        if (eb.increment() > 0){
+        i8 buffer = eb.increment();
+        if (buffer> 0){
             instance->etat = DROITE;
         }
-        else if (eb.increment() < 0){
+        else if (buffer < 0){
             instance->etat = GAUCHE ;
         }
 
+    }
+
+    bool Encodeur::aAppui(){
+        return this->etat==PULL;
+    }
+
+    bool Encodeur::aDroite(){
+        return this->etat==DROITE;
+    }
+    bool Encodeur::aGauche(){
+        return this->etat==GAUCHE;
+    }
+    bool Encodeur::inactif(){
+        return this->etat==INACTIF;
     }
 
 
