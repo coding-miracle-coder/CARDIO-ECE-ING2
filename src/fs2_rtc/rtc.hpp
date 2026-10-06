@@ -3,6 +3,7 @@
 #include "../state.hpp"
 #include "ThreeWire.h"
 #include "RtcDS1302.h"
+#include "../config.h"
 
 
 //======= Fonctions de ce segment=======
