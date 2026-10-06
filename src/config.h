@@ -42,11 +42,14 @@
 
 // ================== 𝐏𝐢𝐧𝐬 ================== //
 
-#define PIN_ROUGE A1
-#define PIN_VERTE A2
-#define PIN_BLEUE A3
-#define PIN_IO 4
-#define PIN_CLK 5
-#define PIN_CE 6
+#define PIN_ROUGE               A1
+#define PIN_VERTE               A2
+#define PIN_BLEUE               A3
+#define PIN_IO                  4
+#define PIN_CLK                 5
+#define PIN_CE                  6
+#define PIN_ENCODEUR_A          7
+#define PIN_ENCODEUR_B          8
+#define PIN_ENCODEUR_BOUTON     9
 
 #endif

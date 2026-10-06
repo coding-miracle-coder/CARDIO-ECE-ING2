@@ -1,4 +1,6 @@
-#include "rtc.h"
+#include "rtc.hpp"
+#include "../config.h"
+#include "../Encodeur.hpp"
 
 //µDéclarations de fonctions utilisés uinuqmenet dans ce fichier :
 static bool bornes(u8 minimal, u8 date, i8& changement, i8 limite);

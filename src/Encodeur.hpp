@@ -1,8 +1,9 @@
-#ifndef ENCDODEUR_H
-#define ENCDODEUR_H
-#include "state.h"
+#pragma once
+
+#include "state.hpp"
 #include "types.h"
-#include "EncoderButton.h"
+#include <EncoderButton.h>
+
 typedef enum action{
     INACTIF,
     GAUCHE,
@@ -27,5 +28,3 @@ public:
     bool aAppui();
     bool inactif();
 };
-
-#endif
