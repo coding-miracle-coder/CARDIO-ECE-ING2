@@ -29,6 +29,7 @@
 
 ## FS2 — RTC
 
+- [x] Implement modifying of the date
 - [ ] Implement DS1302 communication
 - [ ] Read date and time
 - [ ] Verify RTC keeps time after main power loss
@@ -37,9 +38,9 @@
 
 ## FS3 — Health State
 
-- [ ] Define medical BPM thresholds
-- [ ] Implement LOW / NORMAL / HIGH classification
-- [ ] Drive yellow / green / red LEDs
+- [x] Define medical BPM thresholds
+- [x] Implement LOW / NORMAL / HIGH classification
+- [x] Drive yellow / green / red LEDs
 - [ ] Ensure only one LED can be active
 - [ ] Disable all LEDs when BPM is invalid
 
