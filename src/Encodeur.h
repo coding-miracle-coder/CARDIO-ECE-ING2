@@ -21,7 +21,11 @@ private :
     
 public:
     Encodeur();
-    action quelleAction();
+    void loopEncodeur();
+    bool aGauche();
+    bool aDroite();
+    bool aAppui();
+    bool inactif();
 };
 
 #endif
