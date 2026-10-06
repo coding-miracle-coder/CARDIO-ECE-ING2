@@ -4,6 +4,7 @@
 #include "ThreeWire.h"
 #include "RtcDS1302.h"
 #include "../config.h"
+#include "Encodeur.hpp"
 
 
 //======= Fonctions de ce segment=======
