@@ -27,4 +27,7 @@ Le pipeline prévu est :
 
 Les constantes de traitement seront ajustées après acquisition du signal réel du capteur WPSE340.
 
+FS2 est partiellement implémentée.
+
+FS3 est partiellement implémentée.
 Voir `TODO.md` pour le suivi détaillé.
