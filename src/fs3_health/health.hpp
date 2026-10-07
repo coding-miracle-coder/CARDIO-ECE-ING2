@@ -17,4 +17,7 @@ typedef uint8_t LedFlag;
 #define LED_YELLOW ((LedFlag)LED_RED|LED_GREEN)
 
 void DefinirEtat(u8 bpm);
-
+String TextePatient();
+LedFlag ChoixCouleur();
+void AllumerLed(LedFlag couleur);
+void loopHealth();
