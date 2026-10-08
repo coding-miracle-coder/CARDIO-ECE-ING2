@@ -1,63 +1,71 @@
 
 #include <Arduino.h>
-#include <ThreeWire.h>
-#include <RtcDS1302.h>
+#include "fs6_storage/storage.hpp"
 
-// DS1302 : DAT = D4, CLK = D5, RST = D6
-ThreeWire wire(4, 5, 6);
-RtcDS1302<ThreeWire> rtc(wire);
+void printRecords() {
+    Serial.print(F("Records: "));
+    Serial.println(Storage::count());
+
+    for (uint8_t i = 0; i < Storage::count(); ++i) {
+        Storage::Record r;
+
+        if (!Storage::read(i, r)) {
+            Serial.println(F("Invalid record"));
+            continue;
+        }
+
+        Serial.print(F("BPM: "));
+        Serial.print(r.bpm);
+
+        Serial.print(F(" | Year: "));
+        Serial.print(r.year);
+
+        Serial.print(F(" | Day: "));
+        Serial.print(r.dayOfYear);
+
+        Serial.print(F(" | Minute: "));
+        Serial.println(r.minuteOfDay);
+    }
+}
 
 void setup() {
     Serial.begin(115200);
     delay(500);
 
-    Serial.println(F("=== DS1302 UNIT TEST ==="));
+    Storage::init();
 
-    rtc.Begin();
+    Serial.println(F("=== FS6 EEPROM TEST ==="));
+    printRecords();
 
-    if (rtc.GetIsWriteProtected()) {
-        rtc.SetIsWriteProtected(false);
-    }
-
-    if (!rtc.IsDateTimeValid()) {
-        Serial.println(F("RTC invalid: setting compile time"));
-        rtc.SetDateTime(RtcDateTime(__DATE__, __TIME__));
-    }
-
-    if (!rtc.GetIsRunning()) {
-        rtc.SetIsRunning(true);
-    }
-
-    Serial.println(F("RTC initialized"));
+    Serial.println(F("s = save, r = read, c = clear"));
 }
 
 void loop() {
-    static uint32_t lastRead = 0;
-
-    if (millis() - lastRead < 1000UL) {
+    if (!Serial.available())
         return;
+
+    char command = Serial.read();
+
+    if (command == 's') {
+        Storage::Record r = {
+            2026,
+            280,
+            720,
+            72
+        };
+
+        Serial.println(
+            Storage::save(r)
+            ? F("SAVE OK")
+            : F("SAVE FAILED")
+        );
     }
 
-    lastRead = millis();
+    if (command == 'r')
+        printRecords();
 
-    RtcDateTime now = rtc.GetDateTime();
-
-    Serial.print(now.Day());
-    Serial.print('/');
-    Serial.print(now.Month());
-    Serial.print('/');
-    Serial.print(now.Year());
-
-    Serial.print(' ');
-
-    if (now.Hour() < 10) Serial.print('0');
-    Serial.print(now.Hour());
-    Serial.print(':');
-
-    if (now.Minute() < 10) Serial.print('0');
-    Serial.print(now.Minute());
-    Serial.print(':');
-
-    if (now.Second() < 10) Serial.print('0');
-    Serial.println(now.Second());
+    if (command == 'c') {
+        Storage::clear();
+        Serial.println(F("EEPROM CLEARED"));
+    }
 }
