@@ -23,8 +23,10 @@ static void initPins() {
 }
 
 void setup(){
-    initPins();         // Initialise les pins
+
     
+    initPins();         // Initialise les pins
+
 }
 
 void loop(){}
