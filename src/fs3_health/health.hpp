@@ -14,7 +14,7 @@ typedef uint8_t LedFlag;
 #define LED_OFF ((LedFlag)0)
 #define LED_RED ((LedFlag)1u<<0)
 #define LED_GREEN ((LedFlag)1u<<1)
-#define LED_YELLOW ((LedFlag)LED_RED|LED_GREEN)
+#define LED_YELLOW ((LedFlag)1u<<2)
 
 void DefinirEtat(u8 bpm);
 String TextePatient();
