@@ -40,16 +40,43 @@
 #define BPM_TRIGGER_1                   1u // À changer
 #define BPM_TRIGGER_2                   1u // À changer
 
-// ================== 𝐏𝐢𝐧𝐬 ================== //
+// ================== Pins — Arduino Nano ATmega328P ================== //
 
+// Capteur PPG
+#define PIN_PPG                 A0
+
+// LEDs indépendantes — actives à HIGH
 #define PIN_ROUGE               A1
 #define PIN_VERTE               A2
 #define PIN_JAUNE               A3
+<<<<<<< HEAD
+=======
+
+// OLED : bus I2C matériel commun
+// SDA = A4 ; SCL = A5
+// Adresses déjà définies : 0x3C et 0x3D
+
+// Boutons — entre la pin et GND, actifs à LOW
+#define PIN_BOUTON_ENREGISTRER   2
+#define PIN_BOUTON_SON           3
+#define PIN_BOUTON_RETOUR        11
+
+// RTC DS1302
+>>>>>>> 6b116ed263fe410df8194d990d5262ba53a3f246
 #define PIN_IO                  4
 #define PIN_CLK                 5
 #define PIN_CE                  6
+
+// Encodeur numérique
 #define PIN_ENCODEUR_A          7
 #define PIN_ENCODEUR_B          8
 #define PIN_ENCODEUR_BOUTON     9
+
+// Buzzer
+#define PIN_BUZZER              10
+
+// D0 / D1 : réservées à la liaison série
+// D12 / D13 : libres
+// A6 / A7 : entrées analogiques uniquement
 
 #endif
