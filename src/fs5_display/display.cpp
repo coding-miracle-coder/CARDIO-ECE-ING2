@@ -19,6 +19,15 @@ static Adafruit_SSD1306 ecran(DISPLAY_WIDTH, DISPLAY_HEIGHT, &Wire, -1);
 
 static bool displayActif = false;
 
+// Un seul transfert en cours avec le buffer partage.
+static bool transfertEnCours = false;
+static u8 adresseTransfert = 0;
+static uint16_t positionTransfert = 0;
+
+// Base de temps du graphique, calculee depuis les acquisitions.
+static u32 resteTempsPPG = 0;
+static bool premierPointPPG = true;
+
 //Reglages du graphique
 
 #define GRAPH_X             18u
@@ -44,34 +53,50 @@ static u32 dernierAffichagePrincipal = 0;
 // Envoie le buffer Adafruit vers l'adresse I2C choisie
 // UN SEUL buffer pour les deux OLED
 static void envoyerBuffer(u8 adresse) {
-    uint8_t *buffer = ecran.getBuffer();
-    uint16_t tailleBuffer = (DISPLAY_WIDTH * DISPLAY_HEIGHT) / 8u;
-
-    // On indique au SSD1306 que l'on va reecrire tout l'ecran
     Wire.beginTransmission(adresse);
-    Wire.write(0x00); // octets suivants = commandes
+    Wire.write(0x00);
     Wire.write(SSD1306_PAGEADDR);
     Wire.write(0);
     Wire.write((DISPLAY_HEIGHT / 8u) - 1u);
     Wire.write(SSD1306_COLUMNADDR);
     Wire.write(0);
     Wire.write(DISPLAY_WIDTH - 1u);
-    Wire.endTransmission();
 
-    // On envoie le buffer par petits paquets pour ne pas depasser
-    // la taille du buffer I2C de l'Arduino
-    uint16_t position = 0;
+    if (Wire.endTransmission() != 0) {
+        displayActif = false;
+        return;
+    }
 
-    while (position < tailleBuffer) {
-        Wire.beginTransmission(adresse);
-        Wire.write(0x40); // octets suivants = donnees d'affichage
+    adresseTransfert = adresse;
+    positionTransfert = 0;
+    transfertEnCours = true;
+}
 
-        for (u8 i = 0; i < 16 && position < tailleBuffer; i++) {
-            Wire.write(buffer[position]);
-            position++;
-        }
+static void continuerEnvoiBuffer() {
+    if (!transfertEnCours) {
+        return;
+    }
 
-        Wire.endTransmission();
+    uint8_t *buffer = ecran.getBuffer();
+    const uint16_t tailleBuffer =
+        (DISPLAY_WIDTH * DISPLAY_HEIGHT) / 8u;
+
+    Wire.beginTransmission(adresseTransfert);
+    Wire.write(0x40);
+
+    for (u8 i = 0; i < 16 && positionTransfert < tailleBuffer; i++) {
+        Wire.write(buffer[positionTransfert]);
+        positionTransfert++;
+    }
+
+    if (Wire.endTransmission() != 0) {
+        transfertEnCours = false;
+        displayActif = false;
+        return;
+    }
+
+    if (positionTransfert >= tailleBuffer) {
+        transfertEnCours = false;
     }
 }
 
@@ -124,14 +149,16 @@ static void gererEncodeur() {
         if (indiceBaseTemps < 3u) {
             indiceBaseTemps++;
             viderHistoriquePPG();
-            dernierPointPPG = millis();
+            premierPointPPG = true;
+            resteTempsPPG = 0;
         }
     }
     else if (temp.aGauche()) {
         if (indiceBaseTemps > 0u) {
             indiceBaseTemps--;
             viderHistoriquePPG();
-            dernierPointPPG = millis();
+            premierPointPPG = true;
+            resteTempsPPG = 0;
         }
     }
 }
@@ -230,77 +257,116 @@ static void afficherEcranPPG() {
     ecran.print("T=");
     ecran.print(basesTempsSecondes[indiceBaseTemps]);
     ecran.print("s/");
-    ecran.print(GRAPH_LARGEUR);
+    ecran.print(GRAPH_LARGEUR - 1u);
     ecran.print("px");
 
     envoyerBuffer(DISPLAY2_I2C_ADDRESS);
 }
 
 //Fonctions publiques
-
 void initDisplay() {
+    displayActif = false;
+    transfertEnCours = false;
+
     Wire.begin();
+    #if defined(WIRE_HAS_TIMEOUT)
+        Wire.setWireTimeout(3000, true);
+    #endif
 
-    // Initialisation du premier OLED
     if (!ecran.begin(SSD1306_SWITCHCAPVCC, DISPLAY1_I2C_ADDRESS)) {
-        displayActif = false;
         return;
     }
 
-    // Le meme objet pour initialiser le second OLED
-    // Le buffer est deja alloue (pas de seconde allocation pour la RAM)
     if (!ecran.begin(SSD1306_SWITCHCAPVCC, DISPLAY2_I2C_ADDRESS)) {
-        displayActif = false;
         return;
     }
 
-    // Les OLED SSD1306 supportent le Fast Mode I2C
     Wire.setClock(400000);
 
-    viderHistoriquePPG();
 
-    ecran.clearDisplay();
-    envoyerBuffer(DISPLAY1_I2C_ADDRESS);
-    envoyerBuffer(DISPLAY2_I2C_ADDRESS);
-
-    dernierPointPPG = millis();
-    dernierAffichagePPG = millis();
-    dernierAffichagePrincipal = millis() - 1000UL;
 
     displayActif = true;
+    viderHistoriquePPG();
+    ecran.clearDisplay();
+
+    envoyerBuffer(DISPLAY1_I2C_ADDRESS);
+    while (transfertEnCours) {
+        continuerEnvoiBuffer();
+    }
+
+    if (!displayActif) {
+        return;
+    }
+
+    envoyerBuffer(DISPLAY2_I2C_ADDRESS);
+    while (transfertEnCours) {
+        continuerEnvoiBuffer();
+    }
+
+    if (!displayActif) {
+        return;
+    }
+
+    premierPointPPG = true;
+    resteTempsPPG = 0;
+
+    dernierAffichagePPG = millis();
+    dernierAffichagePrincipal = millis() - 1000UL;
+}
+
+// Appelee pour chaque echantillon traite par FS1.
+// timestampMs est l'instant d'acquisition, pas l'instant d'affichage.
+void displaySample(f32 valeur, u32 timestampMs) {
+    if (premierPointPPG) {
+        premierPointPPG = false;
+        dernierPointPPG = timestampMs;
+        ajouterPointPPG(valeur);
+        return;
+    }
+
+    u32 ecoule = timestampMs - dernierPointPPG;
+    dernierPointPPG = timestampMs;
+
+    // On conserve le reste de la division pour eviter la derive.
+    resteTempsPPG += ecoule * (GRAPH_LARGEUR - 1u);
+
+    u32 duree =
+        (u32)basesTempsSecondes[indiceBaseTemps] * 1000UL;
+
+    if (resteTempsPPG >= duree) {
+        resteTempsPPG %= duree;
+        ajouterPointPPG(valeur);
+    }
+}
+
+// Utilisee notamment apres une perte d'echantillons.
+void resetDisplaySignal() {
+    viderHistoriquePPG();
+    premierPointPPG = true;
+    resteTempsPPG = 0;
 }
 
 void loopDisplay(CoreState *state) {
+    gererEncodeur();
+
     if (!displayActif || state == NULL) {
         return;
     }
 
-    gererEncodeur();
+    if (transfertEnCours) {
+        continuerEnvoiBuffer();
+        return;
+    }
 
+    // Le buffer est maintenant libre : on peut dessiner dedans.
     u32 maintenant = millis();
 
-    // On choisi avec l'encodeur le temps tot de l'axe
-    // 5s de base
-    u32 intervallePoint = ((u32)basesTempsSecondes[indiceBaseTemps] * 1000UL)
-                           / (GRAPH_LARGEUR - 1u);
-
-    if (intervallePoint == 0) {
-        intervallePoint = 1;
-    }
-
-    // Ajout des points du PPG dans l'historique
-    if (maintenant - dernierPointPPG >= intervallePoint) {
-        ajouterPointPPG(state->ppgValue);
-        dernierPointPPG = maintenant;
-    }
-
-    // Ecran 1 : l'heure et le BPM sont actualises toutes les secondes
     if (maintenant - dernierAffichagePrincipal >= 1000UL) {
         afficherEcranPrincipal(state);
         dernierAffichagePrincipal = maintenant;
+        return;
     }
 
-    // Ecran 2 : actualisation plus rapide pour donner un effet de courbe (0.1s)
     if (maintenant - dernierAffichagePPG >= 100UL) {
         afficherEcranPPG();
         dernierAffichagePPG = maintenant;

@@ -15,8 +15,6 @@
 #define PPG_BASELINE_WINDOW_SAMPLES     128u
 
 /* PPG processing */
-#define PPG_SMOOTH_WINDOW_SAMPLES       8u
-#define PPG_BASELINE_WINDOW_SAMPLES     128u
 #define PPG_NORMALIZE_WINDOW_SAMPLES    64u
 
 #define PPG_BEAT_THRESHOLD              0.50f
@@ -24,7 +22,6 @@
 #define PPG_REFRACTORY_MS               250u
 #define PPG_NO_BEAT_TIMEOUT_MS          2500u
 
-#define BPM_IBI_AVERAGE_COUNT           10u
 
 /* Displays */
 #define DISPLAY_WIDTH                   128u
@@ -49,8 +46,6 @@
 #define PIN_ROUGE               A1
 #define PIN_VERTE               A2
 #define PIN_JAUNE               A3
-<<<<<<< HEAD
-=======
 
 // OLED : bus I2C matériel commun
 // SDA = A4 ; SCL = A5
@@ -62,7 +57,6 @@
 #define PIN_BOUTON_RETOUR        11
 
 // RTC DS1302
->>>>>>> 6b116ed263fe410df8194d990d5262ba53a3f246
 #define PIN_IO                  4
 #define PIN_CLK                 5
 #define PIN_CE                  6

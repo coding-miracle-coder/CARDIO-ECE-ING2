@@ -1,5 +1,6 @@
 #include "heartrate.h"
 #include "../config.h"
+#include <string.h>
 
 // ======================== Internal state ======================== //
 
@@ -128,6 +129,10 @@ static u8 compute_bpm(u16 ibi) {
 // ======================== Public API ======================== //
 
 void heartrate_init(void) {
+    memset(smoothBuffer, 0, sizeof(smoothBuffer));
+    memset(baselineBuffer, 0, sizeof(baselineBuffer));
+    memset(normalizeBuffer, 0, sizeof(normalizeBuffer));
+    memset(ibiBuffer, 0, sizeof(ibiBuffer));
 	smoothIndex = 0;
 	smoothCount = 0;
 	smoothSum = 0;

@@ -24,7 +24,13 @@ static char textHeure[9];
 
 void initHeure(){
     
-    Rtc.SetDateTime(RtcDateTime(__DATE__,__TIME__));
+    Rtc.Begin();
+    Rtc.SetIsWriteProtected(false);
+    if (!Rtc.IsDateTimeValid()) {
+        Rtc.SetDateTime(RtcDateTime(__DATE__, __TIME__));
+    }
+    if (!Rtc.GetIsRunning()) Rtc.SetIsRunning(true);
+    now = Rtc.GetDateTime();
 }
 
 
