@@ -1,79 +1,186 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include <ThreeWire.h>
+#include <RtcDS1302.h>
 #include "config.h"
-#include "state.hpp"
-#include "acquisition/acquisition.hpp"
-#include "fs1_heartrate/heartrate.h"
-#include "fs2_rtc/rtc.hpp"
-#include "fs5_display/display.hpp"
 
-static void initPins() {
-    pinMode(PIN_PPG, INPUT);
+// Objet deja defini dans rtc.cpp.
+extern RtcDS1302<ThreeWire> Rtc;
 
-    // Précharger LOW avant d'activer les sorties.
-    digitalWrite(PIN_ROUGE, LOW);
-    digitalWrite(PIN_VERTE, LOW);
-    digitalWrite(PIN_JAUNE, LOW);
-    digitalWrite(PIN_BUZZER, LOW);
+static const uint8_t boutons[] = {
+    PIN_BOUTON_ENREGISTRER,
+    PIN_BOUTON_SON,
+    PIN_BOUTON_RETOUR,
+    PIN_ENCODEUR_BOUTON
+};
 
-    pinMode(PIN_ROUGE, OUTPUT);
-    pinMode(PIN_VERTE, OUTPUT);
-    pinMode(PIN_JAUNE, OUTPUT);
-    pinMode(PIN_BUZZER, OUTPUT);
+static uint8_t derniereLecture[4];
+static uint8_t etatStable[4];
+static uint32_t dernierChangement[4] = {};
 
-    pinMode(PIN_BOUTON_ENREGISTRER, INPUT_PULLUP);
-    pinMode(PIN_BOUTON_SON, INPUT_PULLUP);
-    pinMode(PIN_BOUTON_RETOUR, INPUT_PULLUP);
-
-    // RTC, I2C et encodeur : initialisation par leurs pilotes.
+static void nomBouton(uint8_t index) {
+    switch (index) {
+        case 0: Serial.print(F("ENREGISTRER")); break;
+        case 1: Serial.print(F("SON"));         break;
+        case 2: Serial.print(F("RETOUR"));      break;
+        case 3: Serial.print(F("CLIC ENCODEUR")); break;
+    }
 }
 
-static CoreState state = {0.0f, 0, false, HEALTH_UNKNOWN};
-static uint16_t lastLosses = 0;
+static void scanI2C() {
+    Serial.println(F("=== SCAN I2C ==="));
+    uint8_t trouves = 0;
 
-// Instantaneous stack/heap gap, NOT a stack high-water measurement.
-extern char __heap_start;
-extern char* __brkval;
-static int freeRam() {
-    char stack;
-    return (int)(&stack - (__brkval ? __brkval : &__heap_start));
+    for (uint8_t adresse = 1; adresse < 127; ++adresse) {
+        Wire.beginTransmission(adresse);
+
+        if (Wire.endTransmission() == 0) {
+            Serial.print(F("Trouve : 0x"));
+            if (adresse < 16) Serial.print('0');
+            Serial.println(adresse, HEX);
+            ++trouves;
+        }
+    }
+
+    Serial.print(F("Nombre de peripheriques : "));
+    Serial.println(trouves);
+    Serial.println(F("Attendu : 0x3C et 0x3D"));
+}
+
+static void afficherHeure() {
+    if (!Rtc.IsDateTimeValid()) {
+        Serial.println(F("RTC : date invalide / liaison a verifier"));
+        return;
+    }
+
+    RtcDateTime date = Rtc.GetDateTime();
+
+    if (!date.IsValid()) {
+        Serial.println(F("RTC : lecture invalide"));
+        return;
+    }
+
+    Serial.print(F("RTC : "));
+    Serial.print(date.Year());
+    Serial.print('-');
+    Serial.print(date.Month());
+    Serial.print('-');
+    Serial.print(date.Day());
+    Serial.print(' ');
+
+    if (date.Hour() < 10) Serial.print('0');
+    Serial.print(date.Hour());
+    Serial.print(':');
+    if (date.Minute() < 10) Serial.print('0');
+    Serial.print(date.Minute());
+    Serial.print(':');
+    if (date.Second() < 10) Serial.print('0');
+    Serial.print(date.Second());
+
+    if (!Rtc.GetIsRunning()) {
+        Serial.print(F(" [HORLOGE ARRETEE]"));
+    }
+
+    Serial.println();
 }
 
 void setup() {
-    initPins();
     Serial.begin(115200);
-    initHeure();
-    heartrate_init();
-    initDisplay();
-    Acquisition::begin(); // Start only after peripheral initialization.
+
+    const uint8_t leds[] = {
+        PIN_ROUGE, PIN_VERTE, PIN_JAUNE
+    };
+
+    for (uint8_t i = 0; i < 3; ++i) {
+        digitalWrite(leds[i], LOW);
+        pinMode(leds[i], OUTPUT);
+    }
+
+    digitalWrite(PIN_BUZZER, LOW);
+    pinMode(PIN_BUZZER, OUTPUT);
+
+    pinMode(PIN_ENCODEUR_A, INPUT_PULLUP);
+    pinMode(PIN_ENCODEUR_B, INPUT_PULLUP);
+
+    for (uint8_t i = 0; i < 4; ++i) {
+        pinMode(boutons[i], INPUT_PULLUP);
+        derniereLecture[i] = digitalRead(boutons[i]);
+        etatStable[i] = derniereLecture[i];
+    }
+
+    delay(500);
+    Serial.println(F("=== TEST CABLAGE ==="));
+
+    // Delais volontaires : test de demarrage uniquement.
+    for (uint8_t i = 0; i < 3; ++i) {
+        digitalWrite(leds[i], HIGH);
+        delay(350);
+        digitalWrite(leds[i], LOW);
+        delay(150);
+    }
+
+    tone(PIN_BUZZER, 1000, 150);
+
+    Wire.begin();
+
+#if defined(WIRE_HAS_TIMEOUT)
+    Wire.setWireTimeout(3000, true);
+#endif
+
+    scanI2C();
+
+    Rtc.Begin(); // Pas de SetDateTime : preserve l'heure existante.
+    afficherHeure();
+
+    Serial.println(F("Appuie sur les boutons et tourne doucement l'encodeur."));
 }
 
 void loop() {
-    const uint16_t losses = Acquisition::dropped();
-    if (losses != lastLosses) {
-        lastLosses = losses;
-        Acquisition::discardPending();
-        heartrate_init();
-        state = {0.0f, 0, false, HEALTH_UNKNOWN};
-        resetDisplaySignal();
+    const uint32_t maintenant = millis();
+
+    // Boutons : changement accepte apres 25 ms de stabilite.
+    for (uint8_t i = 0; i < 4; ++i) {
+        const uint8_t lecture = digitalRead(boutons[i]);
+
+        if (lecture != derniereLecture[i]) {
+            derniereLecture[i] = lecture;
+            dernierChangement[i] = maintenant;
+        }
+
+        if (lecture != etatStable[i] &&
+            maintenant - dernierChangement[i] >= 25) {
+            etatStable[i] = lecture;
+
+            nomBouton(i);
+            Serial.println(
+                lecture == LOW ? F(" : APPUYE") : F(" : RELACHE")
+            );
+
+            if (i == 1 && lecture == LOW) {
+                tone(PIN_BUZZER, 1000, 100);
+            }
+        }
     }
 
-    Acquisition::Sample sample;
-    while (Acquisition::pop(sample)) {
-        heartrate_update(&state, sample.raw, sample.timestampMs);
-        displaySample(state.ppgValue, sample.timestampMs);
-    }
-    loopDisplay(&state);
+    // Diagnostic brut des deux contacts, pas un decodeur de crans.
+    static uint8_t ancienAB = 0xFF;
 
-    // Short diagnostics, once per second; no raw 500 Hz serial stream.
-    static uint32_t lastReport = 0;
-    const uint32_t now = millis();
-    if (now - lastReport >= 1000 && Serial.availableForWrite() >= 48) {
-        lastReport = now;
-        Serial.print(F("BPM="));
-        Serial.print(state.bpmValid ? state.bpm : 0);
-        Serial.print(F(" dropped="));
-        Serial.print(Acquisition::dropped());
-        Serial.print(F(" free="));
-        Serial.println(freeRam());
+    const uint8_t ab =
+        (digitalRead(PIN_ENCODEUR_A) << 1) |
+         digitalRead(PIN_ENCODEUR_B);
+
+    if (ab != ancienAB && Serial.availableForWrite() >= 24) {
+        ancienAB = ab;
+        Serial.print(F("ENC A="));
+        Serial.print((ab >> 1) & 1);
+        Serial.print(F(" B="));
+        Serial.println(ab & 1);
+    }
+
+    static uint32_t derniereHeure = 0;
+
+    if (maintenant - derniereHeure >= 1000) {
+        derniereHeure = maintenant;
+        afficherHeure();
     }
 }

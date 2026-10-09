@@ -51,26 +51,26 @@
 // SDA = A4 ; SCL = A5
 // Adresses déjà définies : 0x3C et 0x3D
 
-// Boutons — entre la pin et GND, actifs à LOW
-#define PIN_BOUTON_ENREGISTRER   2
-#define PIN_BOUTON_SON           3
-#define PIN_BOUTON_RETOUR        11
+// Encodeur numérique           // 𝐃𝐨𝐧𝐞
+#define PIN_ENCODEUR_B          2
+#define PIN_ENCODEUR_BOUTON     3
+#define PIN_ENCODEUR_A          4
 
-// RTC DS1302
-#define PIN_IO                  4
-#define PIN_CLK                 5
-#define PIN_CE                  6
+// Boutons                       // 𝐃𝐨𝐧𝐞
+#define PIN_BOUTON_ENREGISTRER   5
+#define PIN_BOUTON_SON           6
+#define PIN_BOUTON_RETOUR        7
 
-// Encodeur numérique
-#define PIN_ENCODEUR_A          7
-#define PIN_ENCODEUR_B          8
-#define PIN_ENCODEUR_BOUTON     9
+// RTC DS1302                   // 𝐃𝐨𝐧𝐞
+#define PIN_IO                  8
+#define PIN_CE                  9
+#define PIN_CLK                 10
 
 // Buzzer
-#define PIN_BUZZER              10
+#define PIN_BUZZER              11
 
 // D0 / D1 : réservées à la liaison série
-// D12 / D13 : libres
+// D11 / D12 : libres
 // A6 / A7 : entrées analogiques uniquement
 
 #endif

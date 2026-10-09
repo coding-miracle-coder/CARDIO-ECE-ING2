@@ -48,18 +48,19 @@ static u16 apply_moving_average(u16 sample) {
 }
 
 
+// Estimation de la moyenne
 static u16 estimate_baseline(u16 sample) {
-	baselineSum -= baselineBuffer[baselineIndex];
+	baselineSum -= baselineBuffer[baselineIndex];		// On prend la somme, on retire le plus vieux élément
 
-	baselineBuffer[baselineIndex] = sample;
-	baselineSum += sample;
+	baselineBuffer[baselineIndex] = sample;				// On ajoute le nouvel élément
+	baselineSum += sample;								// On ajoute le dernier élément à la somme
 
-	baselineIndex++;
+	baselineIndex++;									// Avance l'index
 
 	if (baselineIndex >= PPG_BASELINE_WINDOW_SAMPLES) { baselineIndex = 0; }
 	if (baselineCount < PPG_BASELINE_WINDOW_SAMPLES) { baselineCount++; }
 
-	return (u16)(baselineSum / baselineCount);
+	return (u16)(baselineSum / baselineCount);			// Calcule la moyenne
 }
 
 
