@@ -44,7 +44,7 @@
 
 #define PIN_ROUGE               A1
 #define PIN_VERTE               A2
-#define PIN_BLEUE               A3
+#define PIN_JAUNE               A3
 #define PIN_IO                  4
 #define PIN_CLK                 5
 #define PIN_CE                  6
