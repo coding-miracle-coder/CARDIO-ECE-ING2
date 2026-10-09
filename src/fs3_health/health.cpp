@@ -43,6 +43,7 @@ String TextePatient(){
 void AllumerLed(LedFlag couleur){
     digitalWrite(PIN_ROUGE,couleur & LED_RED);
     digitalWrite(PIN_VERTE,couleur &  LED_GREEN);
+    digitalWrite(PIN_JAUNE,couleur & LED_YELLOW);
 }
 
 LedFlag ChoixCouleur(){

@@ -85,7 +85,7 @@ RtcDateTime modifierHeure(){
             switch(sortie){
                 case 0 :
                     changerHeure(nouvelleDate,changement);
-                break;
+                    break;
                 case 1 : 
                     changerMinute(nouvelleDate,changement);
                     break;
