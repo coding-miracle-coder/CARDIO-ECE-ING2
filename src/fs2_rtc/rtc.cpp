@@ -131,17 +131,15 @@ bool TestValidite(){
     return false;
 }
 
-void loopRtc(){
-    static u16 derniereLecture = 0;
-    u16 maintenant = (u16)millis();
+void loopRtc() {                    // J'ai modifié ça pcq y'avait un bug dedans
+    static u32 derniereLecture = 0;
+    const u32 maintenant = millis();
 
-    if ((u16)(maintenant-derniereLecture)>=1000){
+    if (maintenant - derniereLecture >= 1000UL) {
+        derniereLecture = maintenant;
         now = Rtc.GetDateTime();
-        // Spammer l'affichage oled actualiser toutes les secondes c'est a toi Bastien
     }
-    derniereLecture=maintenant;
 }
-
 
 
 

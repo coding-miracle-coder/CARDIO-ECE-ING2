@@ -17,9 +17,9 @@ static u16 baselineCount;
 static u32 baselineSum;
 
 // Normalization window //
-static u16 normalizeBuffer[PPG_NORMALIZE_WINDOW_SAMPLES];
-static u8 normalizeIndex;
-static u8 normalizeCount;
+static u16 amplitudeReference;
+static u32 dernierDecay;
+static bool detectionArmee;
 
 // Beat detection //
 static bool pulseActive;
@@ -68,42 +68,92 @@ static i16 center_signal(u16 sample, u16 baseline) {
 	return (i16)sample - (i16)baseline;
 }
 
+static void update_amplitude(i16 sample, u32 timestampMs) {
+    const u16 magnitude =
+        (sample < 0) ? (u16)(-sample) : (u16)sample;
+
+    // Descente lente de l'enveloppe, sans tableau supplementaire.
+    const u32 pas =
+        (timestampMs - dernierDecay) / PPG_ENVELOPE_DECAY_MS;
+
+    if (pas > 0) {
+        dernierDecay += pas * PPG_ENVELOPE_DECAY_MS;
+
+        if (pas >= amplitudeReference) {
+            amplitudeReference = 0;
+        } else {
+            amplitudeReference -= (u16)pas;
+        }
+    }
+
+    if (magnitude > amplitudeReference) {
+        amplitudeReference = magnitude;
+    }
+}
 
 static f32 normalize_signal(i16 sample) {
-	u16 magnitude = (sample < 0) ? (u16)(-sample) : (u16)sample;
+    if (amplitudeReference < PPG_MIN_AMPLITUDE_ADC) {
+        return 0.0f;
+    }
 
-	normalizeBuffer[normalizeIndex] = magnitude;
-	normalizeIndex++;
-
-	if (normalizeIndex >= PPG_NORMALIZE_WINDOW_SAMPLES) { normalizeIndex = 0; }
-	if (normalizeCount < PPG_NORMALIZE_WINDOW_SAMPLES) { normalizeCount++; }
-
-	u16 maximum = 0;
-
-	for (u8 i = 0; i < normalizeCount; i++) {
-		if (normalizeBuffer[i] > maximum) { maximum = normalizeBuffer[i]; }
-	}
-
-	if (maximum == 0) { return 0.0f; }
-
-	return (f32)sample / (f32)maximum;
+    return (f32)sample / (f32)amplitudeReference;
 }
 
+static bool detect_beat(i16 sample, u32 timestampMs) {
+    if (baselineCount < PPG_BASELINE_WINDOW_SAMPLES ||
+        amplitudeReference < PPG_MIN_AMPLITUDE_ADC) {
+        detectionArmee = false;
+        pulseActive = false;
+        return false;
+    }
 
-static bool detect_beat(f32 sample, u32 timestampMs) {
-	u32 elapsed = timestampMs - lastBeatTime;
+    const i16 seuilHaut = (i16)(amplitudeReference / 2u);
 
-	if (!pulseActive) {
-		if (sample >= PPG_BEAT_THRESHOLD && elapsed >= PPG_REFRACTORY_MS) {
-			pulseActive = true;
-			return true;
-		}
-	}
-	else if (sample < PPG_BEAT_THRESHOLD) { pulseActive = false; }
+    // Rearmement seulement apres retour a zero ou en dessous.
+    // Cela evite les declenchements repetes autour du seuil haut.
+    if (sample <= 0) {
+        detectionArmee = true;
+        pulseActive = false;
+        return false;
+    }
 
-	return false;
+    if (!detectionArmee || sample < seuilHaut) {
+        return false;
+    }
+
+    // Consommer cette montee, meme si elle arrive trop tot.
+    detectionArmee = false;
+
+    const u32 intervalleMinimal =
+        (60000UL + BPM_MAX_VALID - 1u) / BPM_MAX_VALID;
+
+    u32 attente = PPG_REFRACTORY_MS;
+
+    if (attente < intervalleMinimal) {
+        attente = intervalleMinimal;
+    }
+
+    if (lastBeatTime != 0 &&
+        timestampMs - lastBeatTime < attente) {
+        return false;
+    }
+
+    pulseActive = true;
+    return true;
 }
 
+static void reset_beats(CoreState *state) {
+    pulseActive = false;
+    detectionArmee = false;
+    lastBeatTime = 0;
+
+    // compute_bpm() ne lit que les ibiCount entrees valides.
+    ibiIndex = 0;
+    ibiCount = 0;
+
+    state->bpm = 0;
+    state->bpmValid = false;
+}
 
 static u8 compute_bpm(u16 ibi) {
 	ibiBuffer[ibiIndex] = ibi;
@@ -132,7 +182,6 @@ static u8 compute_bpm(u16 ibi) {
 void heartrate_init(void) {
     memset(smoothBuffer, 0, sizeof(smoothBuffer));
     memset(baselineBuffer, 0, sizeof(baselineBuffer));
-    memset(normalizeBuffer, 0, sizeof(normalizeBuffer));
     memset(ibiBuffer, 0, sizeof(ibiBuffer));
 	smoothIndex = 0;
 	smoothCount = 0;
@@ -142,8 +191,9 @@ void heartrate_init(void) {
 	baselineCount = 0;
 	baselineSum = 0;
 
-	normalizeIndex = 0;
-	normalizeCount = 0;
+	amplitudeReference = 0;
+	dernierDecay = 0;
+	detectionArmee = false;
 
 	pulseActive = false;
 	lastBeatTime = 0;
@@ -152,40 +202,70 @@ void heartrate_init(void) {
 	ibiCount = 0;
 }
 
+void heartrate_update(
+    CoreState *state,
+    u16 rawSample,
+    u32 timestampMs
+) {
+    if (state == nullptr) {
+        return;
+    }
 
-void heartrate_update(CoreState *state, u16 rawSample, u32 timestampMs) {
-	
-    u16 smoothed = apply_moving_average(rawSample);
-	u16 baseline = estimate_baseline(smoothed);
-	i16 centered = center_signal(smoothed, baseline);
-	f32 normalized = normalize_signal(centered);
+    const u16 smoothed = apply_moving_average(rawSample);
+    const u16 baseline = estimate_baseline(smoothed);
+    const i16 centered = center_signal(smoothed, baseline);
 
-	state->ppgValue = normalized;
+    update_amplitude(centered, timestampMs);
+    state->ppgValue = normalize_signal(centered);
 
-	if (detect_beat(normalized, timestampMs)) {
-		if (lastBeatTime != 0) {
-			u32 ibi32 = timestampMs - lastBeatTime;
-			if (ibi32 <= UINT16_MAX) {
-				u16 ibi = (u16)ibi32;
-				u8 bpm = compute_bpm(ibi);
+    // Verifier le timeout AVANT de traiter un nouveau battement.
+    if (lastBeatTime != 0 &&
+        timestampMs - lastBeatTime >= PPG_NO_BEAT_TIMEOUT_MS) {
+        reset_beats(state);
+    }
 
-				if (bpm >= BPM_MIN_VALID && bpm <= BPM_MAX_VALID) {
-					state->bpm = bpm;
-					state->bpmValid = true;
-				} else { state->bpmValid = false; }
-			}
-		}
-		lastBeatTime = timestampMs;
-	}
+    if (baselineCount < PPG_BASELINE_WINDOW_SAMPLES ||
+        amplitudeReference < PPG_MIN_AMPLITUDE_ADC) {
+        reset_beats(state);
+        return;
+    }
 
-	if (lastBeatTime != 0 && timestampMs - lastBeatTime >= PPG_NO_BEAT_TIMEOUT_MS) {
-		state->bpm = 0;
-		state->bpmValid = false;
+    if (!detect_beat(centered, timestampMs)) {
+        return;
+    }
 
-		pulseActive = false;
-		lastBeatTime = 0;
+    // Le premier evenement donne seulement une origine temporelle.
+    if (lastBeatTime == 0) {
+        lastBeatTime = timestampMs;
+        return;
+    }
 
-		ibiIndex = 0;
-		ibiCount = 0;
-	}
+    const u32 ibi = timestampMs - lastBeatTime;
+
+    const u32 ibiMin =
+        (60000UL + BPM_MAX_VALID - 1u) / BPM_MAX_VALID;
+    const u32 ibiMax = 60000UL / BPM_MIN_VALID;
+
+    if (ibi < ibiMin) {
+        return;
+    }
+
+    if (ibi > ibiMax) {
+        reset_beats(state);
+        lastBeatTime = timestampMs;
+        return;
+    }
+
+    lastBeatTime = timestampMs;
+
+    // Inserer uniquement un intervalle dans les bornes.
+    const u8 bpm = compute_bpm((u16)ibi);
+
+    // Attendre trois intervalles acceptes avant d'afficher un BPM.
+    state->bpmValid =
+        ibiCount >= 3u &&
+        bpm >= BPM_MIN_VALID &&
+        bpm <= BPM_MAX_VALID;
+
+    state->bpm = state->bpmValid ? bpm : 0;
 }

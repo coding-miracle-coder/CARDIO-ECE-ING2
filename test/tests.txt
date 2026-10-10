@@ -1,0 +1,229 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include "config.h"
+#include "Encodeur.hpp"
+#include "fs2_rtc/rtc.hpp"
+#include <U8g2lib.h>
+
+extern RtcDS1302<ThreeWire> Rtc;
+extern Encodeur temp;
+
+const uint8_t leds[] = {
+    PIN_VERTE,
+    PIN_JAUNE,
+    PIN_ROUGE
+};
+
+const uint8_t boutons[] = {
+    PIN_BOUTON_ENREGISTRER,
+    PIN_BOUTON_SON,
+    PIN_BOUTON_RETOUR
+};
+
+static bool dernierEtatLu[3] = {HIGH, HIGH, HIGH};
+static bool etatStable[3] = {HIGH, HIGH, HIGH};
+static uint32_t dernierChangement[3] = {0, 0, 0};
+
+static uint8_t etapeLED = 0;
+static uint32_t dernierChangementLED = 0;
+
+static void scannerI2C() {
+    u8 nombre = 0;
+
+    Serial.println(F("=== SCAN I2C ==="));
+
+    for (u8 adresse = 1; adresse < 127; adresse++) {
+        Wire.beginTransmission(adresse);
+        const u8 erreur = Wire.endTransmission();
+
+        if (erreur == 0) {
+            Serial.print(F("Peripherique trouve : 0x"));
+
+            if (adresse < 0x10) {
+                Serial.print('0');
+            }
+
+            Serial.println(adresse, HEX);
+            nombre++;
+        }
+        else if (erreur != 2) {
+            Serial.print(F("Erreur I2C "));
+            Serial.print(erreur);
+            Serial.print(F(" a l'adresse 0x"));
+            Serial.println(adresse, HEX);
+        }
+    }
+
+    Serial.print(F("Nombre de peripheriques : "));
+    Serial.println(nombre);
+    Serial.println(F("=== FIN DU SCAN ==="));
+}
+
+// "_1_" : buffer d'une page, soit 128 octets.
+// Un seul objet pour les deux OLED.
+static U8G2_SSD1306_128X64_NONAME_1_HW_I2C ecranTest(
+    U8G2_R0,
+    U8X8_PIN_NONE
+);
+
+static void testerOLED(u8 adresse) {
+    // U8g2 attend l'adresse I2C decalee d'un bit.
+    ecranTest.setI2CAddress(adresse << 1);
+    ecranTest.setBusClock(100000UL);
+    ecranTest.begin();
+
+    ecranTest.setFont(u8g2_font_6x12_tr);
+
+    ecranTest.firstPage();
+    do {
+        ecranTest.drawFrame(0, 0, 128, 64);
+
+        ecranTest.setCursor(10, 24);
+        ecranTest.print(F("CARDIO ECE"));
+
+        ecranTest.setCursor(10, 46);
+        ecranTest.print(F("OLED : 0x"));
+        ecranTest.print(adresse, HEX);
+    } while (ecranTest.nextPage());
+
+    Serial.print(F("Image envoyee a 0x"));
+    Serial.println(adresse, HEX);
+}
+
+void setup() {
+    Serial.begin(115200);
+
+    for (uint8_t i = 0; i < 3; i++) {
+        pinMode(leds[i], OUTPUT);
+        digitalWrite(leds[i], LOW);
+
+        pinMode(boutons[i], INPUT_PULLUP);
+    }
+
+    digitalWrite(leds[0], HIGH);
+    dernierChangementLED = millis();
+
+    initHeure();
+    Serial.println(F("RTC initialise."));
+
+    Serial.println(F("Test LEDs + boutons pret."));
+    Wire.begin();
+    Wire.setClock(100000UL);
+
+    #if defined(WIRE_HAS_TIMEOUT)
+        Wire.setWireTimeout(3000UL, true);
+    #endif
+
+    scannerI2C();
+    testerOLED(0x3C);
+    testerOLED(0x3D);
+
+    pinMode(PIN_BUZZER, OUTPUT);
+    digitalWrite(PIN_BUZZER, LOW);
+    pinMode(PIN_PPG, INPUT);
+}
+
+void loop() {
+    temp.loopEncodeur();
+
+    if (temp.aDroite()) {
+        Serial.println(F("ENCODEUR : droite"));
+    }
+    else if (temp.aGauche()) {
+        Serial.println(F("ENCODEUR : gauche"));
+    }
+    else if (temp.aAppui()) {
+        Serial.println(F("ENCODEUR : clic"));
+    }
+    const uint32_t maintenant = millis();
+
+    // Vert -> jaune -> rouge -> tout eteint, 1 s par etape.
+    if (maintenant - dernierChangementLED >= 1000UL) {
+        dernierChangementLED = maintenant;
+        etapeLED = (etapeLED + 1u) % 4u;
+
+        for (uint8_t i = 0; i < 3; i++) {
+            digitalWrite(leds[i], etapeLED == i ? HIGH : LOW);
+        }
+    }
+
+    for (uint8_t i = 0; i < 3; i++) {
+        const bool lecture = digitalRead(boutons[i]);
+
+        if (lecture != dernierEtatLu[i]) {
+            dernierEtatLu[i] = lecture;
+            dernierChangement[i] = maintenant;
+        }
+
+        // Valide seulement un etat inchange depuis 25 ms.
+        if (lecture != etatStable[i] &&
+            maintenant - dernierChangement[i] >= 25UL) {
+
+            etatStable[i] = lecture;
+
+            switch (i) {
+                case 0: Serial.print(F("ENREGISTRER")); break;
+                case 1: Serial.print(F("SON"));         break;
+                case 2: Serial.print(F("RETOUR"));      break;
+            }
+
+            if (lecture == LOW) {
+                Serial.println(F(" : appuye"));
+                if (boutons[i] == PIN_BOUTON_SON) {
+                    tone(PIN_BUZZER, 1000, 150);
+                }
+            } else {
+                Serial.println(F(" : relache"));
+            }
+        }
+    }
+
+    static u32 derniereLectureRTC = 0;
+    const u32 instantRTC = millis();
+
+    if (instantRTC - derniereLectureRTC >= 1000UL) {
+        derniereLectureRTC = instantRTC;
+
+        const RtcDateTime date = Rtc.GetDateTime();
+
+        if (!date.IsValid()) {
+            Serial.print(F("RTC invalide : "));
+            Serial.print(date.Year());
+            Serial.print('/');
+            Serial.print(date.Month());
+            Serial.print('/');
+            Serial.print(date.Day());
+            Serial.print(' ');
+            Serial.print(date.Hour());
+            Serial.print(':');
+            Serial.print(date.Minute());
+            Serial.print(':');
+            Serial.println(date.Second());
+        } /* else {
+            char texte[20];
+
+            snprintf(
+                texte, sizeof(texte),
+                "%02u/%02u/%04u %02u:%02u:%02u",
+                (unsigned int)date.Day(),
+                (unsigned int)date.Month(),
+                (unsigned int)date.Year(),
+                (unsigned int)date.Hour(),
+                (unsigned int)date.Minute(),
+                (unsigned int)date.Second()
+            );
+
+            Serial.print(F("RTC : "));
+            Serial.println(texte);
+        }*/ 
+    }
+    static u32 derniereLecturePPG = 0;
+    const u32 instantPPG = millis();
+
+    if (instantPPG - derniereLecturePPG >= 10UL) {
+        derniereLecturePPG = instantPPG;
+
+        const u16 valeur = (u16)analogRead(PIN_PPG);
+        Serial.println(valeur);
+    }
+}
