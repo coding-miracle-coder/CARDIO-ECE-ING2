@@ -2,8 +2,8 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
+#include <string.h>
 #include <ThreeWire.h>
 #include <RtcDS1302.h>
 
@@ -14,15 +14,12 @@
 extern RtcDS1302<ThreeWire> Rtc;
 extern Encodeur temp;
 
-// Un seul objet Adafruit_SSD1306/buffeur utiliser pour les deux ecrans à cause de la RAM
-static Adafruit_SSD1306 ecran(DISPLAY_WIDTH, DISPLAY_HEIGHT, &Wire, -1);
-
+// Un seul buffer de page de 128 octets, partage entre les deux OLED.
+static U8G2_SSD1306_128X64_NONAME_1_HW_I2C ecran(U8G2_R0, U8X8_PIN_NONE);
 static bool displayActif = false;
 
-// Un seul transfert en cours avec le buffer partage.
-static bool transfertEnCours = false;
-static u8 adresseTransfert = 0;
-static uint16_t positionTransfert = 0;
+enum EcranEnCours : u8 { AUCUN, PRINCIPAL, PPG };
+static EcranEnCours ecranEnCours = AUCUN;
 
 // Base de temps du graphique, calculee depuis les acquisitions.
 static u32 resteTempsPPG = 0;
@@ -35,10 +32,9 @@ static bool premierPointPPG = true;
 #define GRAPH_Y_BAS         50u
 #define GRAPH_LARGEUR       (DISPLAY_WIDTH - GRAPH_X)
 
-// Bases de temps possibles
-// L'encodeur permet de passer de l'une a l'autre
-static const u8 basesTempsSecondes[] = {1, 2, 5, 10};
-static u8 indiceBaseTemps = 2; // Demarrage sur 5 secondes
+
+// 4 a 40 quarts de seconde = 1,00 a 10,00 secondes.
+static u8 baseTempsQuarts = 20; // Demarrage a 5,00 s.
 
 // Le PPG est deja normalise entre environ -1 et +1 dans heartrate.cpp
 // Stockage entre -100 et +100 pour economiser la RAM
@@ -48,56 +44,24 @@ static u32 dernierPointPPG = 0;
 static u32 dernierAffichagePPG = 0;
 static u32 dernierAffichagePrincipal = 0;
 
-// Fonctions internes
+// Les donnees d'une image restent identiques pendant ses huit pages.
+// L'acquisition continue d'alimenter historiquePPG entre les pages.
+// Une seule image etant dessinee a la fois, les instantanes partagent la RAM.
+static union {
+    struct {
+        char heure[9];
+        u8 bpm;
+        bool bpmValid;
+    } principal;
+    struct {
+        i8 valeurs[GRAPH_LARGEUR];
+        u8 baseQuarts;
+    } ppg;
+} image;
 
-// Envoie le buffer Adafruit vers l'adresse I2C choisie
-// UN SEUL buffer pour les deux OLED
-static void envoyerBuffer(u8 adresse) {
+static bool adressePresente(u8 adresse) {
     Wire.beginTransmission(adresse);
-    Wire.write(0x00);
-    Wire.write(SSD1306_PAGEADDR);
-    Wire.write(0);
-    Wire.write((DISPLAY_HEIGHT / 8u) - 1u);
-    Wire.write(SSD1306_COLUMNADDR);
-    Wire.write(0);
-    Wire.write(DISPLAY_WIDTH - 1u);
-
-    if (Wire.endTransmission() != 0) {
-        displayActif = false;
-        return;
-    }
-
-    adresseTransfert = adresse;
-    positionTransfert = 0;
-    transfertEnCours = true;
-}
-
-static void continuerEnvoiBuffer() {
-    if (!transfertEnCours) {
-        return;
-    }
-
-    uint8_t *buffer = ecran.getBuffer();
-    const uint16_t tailleBuffer =
-        (DISPLAY_WIDTH * DISPLAY_HEIGHT) / 8u;
-
-    Wire.beginTransmission(adresseTransfert);
-    Wire.write(0x40);
-
-    for (u8 i = 0; i < 16 && positionTransfert < tailleBuffer; i++) {
-        Wire.write(buffer[positionTransfert]);
-        positionTransfert++;
-    }
-
-    if (Wire.endTransmission() != 0) {
-        transfertEnCours = false;
-        displayActif = false;
-        return;
-    }
-
-    if (positionTransfert >= tailleBuffer) {
-        transfertEnCours = false;
-    }
+    return Wire.endTransmission() == 0;
 }
 
 static void viderHistoriquePPG() {
@@ -143,175 +107,157 @@ static void ajouterPointPPG(f32 valeur) {
 }
 
 static void gererEncodeur() {
-    temp.loopEncodeur();
+    if (temp.aDroite() && baseTempsQuarts < 40u) {
+        ++baseTempsQuarts;
+    }
+    else if (temp.aGauche() && baseTempsQuarts > 4u) {
+        --baseTempsQuarts;
+    }
+    else {
+        return;
+    }
 
-    if (temp.aDroite()) {
-        if (indiceBaseTemps < 3u) {
-            indiceBaseTemps++;
-            viderHistoriquePPG();
-            premierPointPPG = true;
-            resteTempsPPG = 0;
-        }
-    }
-    else if (temp.aGauche()) {
-        if (indiceBaseTemps > 0u) {
-            indiceBaseTemps--;
-            viderHistoriquePPG();
-            premierPointPPG = true;
-            resteTempsPPG = 0;
-        }
-    }
+    resetDisplaySignal();
 }
 
-static void afficherEcranPrincipal(CoreState *state) {
-    RtcDateTime maintenant = Rtc.GetDateTime();
+static void afficherEcranPrincipal() {
+    // Les coordonnees verticales U8g2 sont ici des lignes de base.
+    ecran.setFont(u8g2_font_logisoso16_tn);
+    ecran.setCursor(16, 22);
+    ecran.print(image.principal.heure);
+    ecran.drawLine(8, 27, 119, 27);
 
-    ecran.clearDisplay();
-    ecran.setTextColor(SSD1306_WHITE);
+    ecran.setFont(u8g2_font_6x10_tr);
+    ecran.setCursor(8, 46);
+    ecran.print(F("BPM"));
 
-    //Heure
-    ecran.setTextSize(2);
-    ecran.setCursor(16, 4);
-
-    if (maintenant.IsValid()) {
-        if (maintenant.Hour() < 10) ecran.print('0');
-        ecran.print(maintenant.Hour());
-        ecran.print(':');
-
-        if (maintenant.Minute() < 10) ecran.print('0');
-        ecran.print(maintenant.Minute());
-        ecran.print(':');
-
-        if (maintenant.Second() < 10) ecran.print('0');
-        ecran.print(maintenant.Second());
+    ecran.setFont(u8g2_font_logisoso24_tn);
+    ecran.setCursor(45, 59);
+    if (image.principal.bpmValid) {
+        ecran.print(image.principal.bpm);
+    } else {
+        // Independamment des glyphes disponibles dans la police numerique.
+        ecran.drawHLine(47, 46, 16);
     }
-    else {
-        ecran.print("--:--:--");
-    }
-
-    ecran.drawLine(8, 27, 119, 27, SSD1306_WHITE);
-
-    //BPM
-    ecran.setTextSize(1);
-    ecran.setCursor(8, 38);
-    ecran.print("BPM");
-
-    ecran.setTextSize(3);
-    ecran.setCursor(45, 34);
-
-    if (state->bpmValid) {
-        ecran.print(state->bpm);
-    }
-    else {
-        //un tiret si la valeur BPM n'est pas valide
-        ecran.print('-');
-    }
-
-    envoyerBuffer(DISPLAY1_I2C_ADDRESS);
 }
 
 static void afficherEcranPPG() {
-    ecran.clearDisplay();
-    ecran.setTextColor(SSD1306_WHITE);
-    ecran.setTextSize(1);
+    ecran.setFont(u8g2_font_6x10_tr);
 
     // Titre
-    ecran.setCursor(0, 0);
-    ecran.print("PPG");
+    ecran.setCursor(0, 8);
+    ecran.print(F("PPG"));
 
     // Graduation verticale avec norma du signal
-    ecran.setCursor(0, GRAPH_Y_HAUT - 3u);
-    ecran.print("1");
+    ecran.setCursor(0, GRAPH_Y_HAUT + 6u);
+    ecran.print(F("1"));
 
-    ecran.setCursor(0, ((GRAPH_Y_HAUT + GRAPH_Y_BAS) / 2u) - 3u);
-    ecran.print("0");
+    ecran.setCursor(0, ((GRAPH_Y_HAUT + GRAPH_Y_BAS) / 2u) + 3u);
+    ecran.print(F("0"));
 
-    ecran.setCursor(0, GRAPH_Y_BAS - 5u);
-    ecran.print("-1");
+    ecran.setCursor(0, GRAPH_Y_BAS);
+    ecran.print(F("-1"));
 
     // Axes et ligne du zero
-    ecran.drawLine(GRAPH_X, GRAPH_Y_HAUT, GRAPH_X, GRAPH_Y_BAS, SSD1306_WHITE);
-    ecran.drawLine(GRAPH_X, GRAPH_Y_BAS, DISPLAY_WIDTH - 1u, GRAPH_Y_BAS, SSD1306_WHITE);
+    ecran.drawLine(GRAPH_X, GRAPH_Y_HAUT, GRAPH_X, GRAPH_Y_BAS);
+    ecran.drawLine(GRAPH_X, GRAPH_Y_BAS, DISPLAY_WIDTH - 1u, GRAPH_Y_BAS);
     ecran.drawLine(GRAPH_X, (GRAPH_Y_HAUT + GRAPH_Y_BAS) / 2u,
-                   DISPLAY_WIDTH - 1u, (GRAPH_Y_HAUT + GRAPH_Y_BAS) / 2u,
-                   SSD1306_WHITE);
+                   DISPLAY_WIDTH - 1u, (GRAPH_Y_HAUT + GRAPH_Y_BAS) / 2u);
 
     // Graduations horizontales tous les quarts de l'ecran
     for (u8 i = 0; i <= 4; i++) {
         u8 x = GRAPH_X + ((GRAPH_LARGEUR - 1u) * i) / 4u;
-        ecran.drawLine(x, GRAPH_Y_BAS, x, GRAPH_Y_BAS + 2u, SSD1306_WHITE);
+        ecran.drawLine(x, GRAPH_Y_BAS, x, GRAPH_Y_BAS + 2u);
     }
 
     // Courbe PPG
     for (u8 i = 1; i < GRAPH_LARGEUR; i++) {
         u8 x1 = GRAPH_X + i - 1u;
         u8 x2 = GRAPH_X + i;
-        u8 y1 = convertirY(historiquePPG[i - 1u]);
-        u8 y2 = convertirY(historiquePPG[i]);
+        u8 y1 = convertirY(image.ppg.valeurs[i - 1u]);
+        u8 y2 = convertirY(image.ppg.valeurs[i]);
 
-        ecran.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+        ecran.drawLine(x1, y1, x2, y2);
     }
 
     // Base de temps
-    ecran.setCursor(18, 55);
-    ecran.print("T=");
-    ecran.print(basesTempsSecondes[indiceBaseTemps]);
-    ecran.print("s/");
-    ecran.print(GRAPH_LARGEUR - 1u);
-    ecran.print("px");
+    ecran.setCursor(18, 63);
+    ecran.print(F("T="));
 
-    envoyerBuffer(DISPLAY2_I2C_ADDRESS);
+    ecran.print(image.ppg.baseQuarts / 4u);
+    ecran.print('.');
+
+    const u8 centiemes = (image.ppg.baseQuarts % 4u) * 25u;
+    if (centiemes < 10u) ecran.print('0');
+    ecran.print(centiemes);
+
+    ecran.print(F("s/"));
+    ecran.print(GRAPH_LARGEUR - 1u);
+    ecran.print(F("px"));
+
+}
+
+// Une seule page dessinee/transmise par appel : retour rapide a l'acquisition.
+static void continuerAffichage() {
+    if (ecranEnCours == PRINCIPAL) {
+        afficherEcranPrincipal();
+    } else {
+        afficherEcranPPG();
+    }
+
+    if (!ecran.nextPage()) {
+        ecranEnCours = AUCUN;
+    }
+
+    #if defined(WIRE_HAS_TIMEOUT)
+        if (Wire.getWireTimeoutFlag()) {
+            Wire.clearWireTimeoutFlag();
+            displayActif = false;
+            ecranEnCours = AUCUN;
+            Serial.println(F("OLED: timeout I2C"));
+        }
+    #endif
 }
 
 //Fonctions publiques
 void initDisplay() {
     displayActif = false;
-    transfertEnCours = false;
+    ecranEnCours = AUCUN;
 
     Wire.begin();
     #if defined(WIRE_HAS_TIMEOUT)
         Wire.setWireTimeout(3000, true);
+        Wire.clearWireTimeoutFlag();
     #endif
 
-    if (!ecran.begin(SSD1306_SWITCHCAPVCC, DISPLAY1_I2C_ADDRESS)) {
+    // begin() U8g2 ne teste pas la presence physique des ecrans.
+    if (!adressePresente(DISPLAY1_I2C_ADDRESS) ||
+        !adressePresente(DISPLAY2_I2C_ADDRESS)) {
+        Serial.println(F("OLED: ecran absent a 0x3C ou 0x3D"));
         return;
     }
 
-    if (!ecran.begin(SSD1306_SWITCHCAPVCC, DISPLAY2_I2C_ADDRESS)) {
-        return;
-    }
+    ecran.setBusClock(400000UL);
+    // U8g2 attend l'adresse I2C decalee d'un bit.
+    ecran.setI2CAddress(DISPLAY1_I2C_ADDRESS << 1);
+    ecran.begin();
+    ecran.setI2CAddress(DISPLAY2_I2C_ADDRESS << 1);
+    ecran.begin();
+    ecran.setFontPosBaseline();
 
-    Wire.setClock(400000);
-
-
+    #if defined(WIRE_HAS_TIMEOUT)
+        if (Wire.getWireTimeoutFlag()) {
+            Wire.clearWireTimeoutFlag();
+            Serial.println(F("OLED: timeout initialisation"));
+            return;
+        }
+    #endif
 
     displayActif = true;
-    viderHistoriquePPG();
-    ecran.clearDisplay();
-
-    envoyerBuffer(DISPLAY1_I2C_ADDRESS);
-    while (transfertEnCours) {
-        continuerEnvoiBuffer();
-    }
-
-    if (!displayActif) {
-        return;
-    }
-
-    envoyerBuffer(DISPLAY2_I2C_ADDRESS);
-    while (transfertEnCours) {
-        continuerEnvoiBuffer();
-    }
-
-    if (!displayActif) {
-        return;
-    }
-
-    premierPointPPG = true;
-    resteTempsPPG = 0;
-
-    dernierAffichagePPG = millis();
+    resetDisplaySignal();
+    dernierAffichagePPG = millis() - 100UL;
     dernierAffichagePrincipal = millis() - 1000UL;
+    Serial.println(F("OLED: 0x3C + 0x3D, U8g2 pages"));
 }
 
 // Appelee pour chaque echantillon traite par FS1.
@@ -330,8 +276,7 @@ void displaySample(f32 valeur, u32 timestampMs) {
     // On conserve le reste de la division pour eviter la derive.
     resteTempsPPG += ecoule * (GRAPH_LARGEUR - 1u);
 
-    u32 duree =
-        (u32)basesTempsSecondes[indiceBaseTemps] * 1000UL;
+    u32 duree = (u32)baseTempsQuarts * 250UL;
 
     if (resteTempsPPG >= duree) {
         resteTempsPPG %= duree;
@@ -353,22 +298,36 @@ void loopDisplay(CoreState *state) {
         return;
     }
 
-    if (transfertEnCours) {
-        continuerEnvoiBuffer();
+    if (ecranEnCours != AUCUN) {
+        continuerAffichage();
         return;
     }
 
-    // Le buffer est maintenant libre : on peut dessiner dedans.
-    u32 maintenant = millis();
-
+    const u32 maintenant = millis();
     if (maintenant - dernierAffichagePrincipal >= 1000UL) {
-        afficherEcranPrincipal(state);
+        const RtcDateTime date = Rtc.GetDateTime();
+        if (date.IsValid()) {
+            snprintf(image.principal.heure, sizeof(image.principal.heure),
+                     "%02u:%02u:%02u", (unsigned)date.Hour(),
+                     (unsigned)date.Minute(), (unsigned)date.Second());
+        } else {
+            strcpy(image.principal.heure, "--:--:--");
+        }
+        image.principal.bpm = state->bpm;
+        image.principal.bpmValid = state->bpmValid;
+        ecran.setI2CAddress(DISPLAY1_I2C_ADDRESS << 1);
+        ecranEnCours = PRINCIPAL;
         dernierAffichagePrincipal = maintenant;
+    } else if (maintenant - dernierAffichagePPG >= 100UL) {
+        memcpy(image.ppg.valeurs, historiquePPG, sizeof(historiquePPG));
+        image.ppg.baseQuarts = baseTempsQuarts;
+        ecran.setI2CAddress(DISPLAY2_I2C_ADDRESS << 1);
+        ecranEnCours = PPG;
+        dernierAffichagePPG = maintenant;
+    } else {
         return;
     }
 
-    if (maintenant - dernierAffichagePPG >= 100UL) {
-        afficherEcranPPG();
-        dernierAffichagePPG = maintenant;
-    }
+    ecran.firstPage();
+    continuerAffichage();
 }

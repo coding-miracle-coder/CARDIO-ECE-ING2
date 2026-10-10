@@ -6,6 +6,7 @@
 #include "acquisition/acquisition.hpp"
 #include "fs1_heartrate/heartrate.h"
 #include "fs2_rtc/rtc.hpp"
+#include "fs5_display/display.hpp"
 
 extern Encodeur temp;
 
@@ -39,8 +40,9 @@ void setup() {
 
     initHeure();
     heartrate_init();
+    initDisplay();
 
-    Serial.println(F("Integration acquisition + FS1 : 500 Hz"));
+    Serial.println(F("Integration acquisition + FS1 + FS5 : 500 Hz"));
 
     // Demarrer apres les initialisations potentiellement longues.
     Acquisition::begin();
@@ -55,6 +57,7 @@ void loop() {
         // Une discontinuite invalide l'historique du traitement.
         Acquisition::discardPending();
         heartrate_init();
+        resetDisplaySignal();
 
         state.ppgValue = 0.0f;
         state.bpm = 0;
@@ -73,10 +76,12 @@ void loop() {
             sample.raw,
             sample.timestampMs
         );
+        displaySample(state.ppgValue, sample.timestampMs);
     }
 
     temp.loopEncodeur();
     loopRtc();
+    loopDisplay(&state);
 
     // Diagnostic limite a 5 lignes par seconde.
     const u32 maintenant = millis();

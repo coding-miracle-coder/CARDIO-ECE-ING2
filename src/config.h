@@ -13,8 +13,8 @@
 #define BPM_IBI_AVERAGE_COUNT           10u
 #define PPG_SMOOTH_WINDOW_SAMPLES       8u
 #define PPG_BASELINE_WINDOW_SAMPLES     128u
-#define PPG_MIN_AMPLITUDE_ADC  10u
-#define PPG_ENVELOPE_DECAY_MS  20u
+#define PPG_MIN_AMPLITUDE_ADC           10u
+#define PPG_ENVELOPE_DECAY_MS           20u
 
 /* PPG processing */
 #define PPG_NORMALIZE_WINDOW_SAMPLES    64u
